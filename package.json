@@ -1,0 +1,77 @@
+{
+  "name": "@local/dsh-lark-ta",
+  "version": "1.0.0",
+  "private": true,
+  "description": "C++ 课程 AI 助教的飞书常驻插件：群聊/私聊答疑、受限文件工具、长期记忆、每晚整理与控制面板。",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "dsh": ">=0.2.1-rc.1 <0.3.0-0",
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/ta-fs-scope.test.mjs"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./channel-runtime": "./channel-runtime.js",
+    "./panel-runtime": "./panel-runtime.js",
+    "./curator-runtime": "./curator-runtime.js",
+    "./scheduler": "./scheduler.js",
+    "./memory-store": "./memory-store.js",
+    "./memory-context": "./memory-context.js",
+    "./memory-tool": "./memory-tool.js",
+    "./memory-curator": "./memory-curator.js",
+    "./history-store": "./history-store.js",
+    "./history-context": "./history-context.js",
+    "./reply-tool": "./reply-tool.js",
+    "./send-file": "./send-file.js",
+    "./send-text": "./send-text.js",
+    "./schedule-tool": "./schedule-tool.js",
+    "./ta-fs": "./ta-fs.js",
+    "./ta-fs-scope": "./ta-fs-scope.js",
+    "./doc-exec": "./doc-exec.js",
+    "./luogu": "./luogu.js",
+    "./view-image": "./view-image.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "channel-runtime.js",
+    "panel-runtime.js",
+    "curator-runtime.js",
+    "scheduler.js",
+    "memory-store.js",
+    "memory-context.js",
+    "memory-tool.js",
+    "memory-curator.js",
+    "history-store.js",
+    "history-context.js",
+    "reply-tool.js",
+    "send-file.js",
+    "send-text.js",
+    "schedule-tool.js",
+    "ta-fs.js",
+    "ta-fs-scope.js",
+    "doc-exec.js",
+    "luogu.js",
+    "view-image.js",
+    "cordis.patch.yml",
+    "TA.md",
+    "流程安排.md",
+    "ui/",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.59.0",
+    "@deepseek-ai/schemastery": "^3.18.5"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
