@@ -2,7 +2,7 @@
   "name": "@local/dsh-ta-panel",
   "version": "1.0.0",
   "private": true,
-  "description": "dsh-lark-TA 控制面板：Host JSON 路由 + 挂在 Plugin Manager 行上的浏览器 bundle。",
+  "description": "dsh-lark-TA 控制面板：Host JSON 路由 + 侧栏「TA」整页浏览器 bundle。",
   "type": "module",
   "exports": {
     ".": "./index.js",
