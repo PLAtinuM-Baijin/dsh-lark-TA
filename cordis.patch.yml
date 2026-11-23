@@ -207,8 +207,8 @@
               serverName: lark
               command: node
               args:
-                - !!js `${process.env.TA_LARK_MCP_DIR || '/opt/lark-mcp-dsh'}/node_modules/tsx/dist/cli.mjs`
-                - !!js `${process.env.TA_LARK_MCP_DIR || '/opt/lark-mcp-dsh'}/src/index.ts`
+                - !!js (process.env.TA_LARK_MCP_DIR || '/opt/lark-mcp-dsh') + '/node_modules/tsx/dist/cli.mjs'
+                - !!js (process.env.TA_LARK_MCP_DIR || '/opt/lark-mcp-dsh') + '/src/index.ts'
               env:
                 LARK_APP_ID: !!js process.env.TA_APP_ID
                 LARK_APP_SECRET: !!js process.env.TA_APP_SECRET
