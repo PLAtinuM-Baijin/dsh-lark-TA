@@ -7,7 +7,7 @@
  * 路由（全部走 connection.requestRejection 的登录与 Host/Origin 校验）：
  *   GET  /ta-panel/state   通道、会话、任务、整理器、记忆概览
  *   GET  /ta-panel/memory  全局或某个 chat 的记忆明细
- *   GET  /ta-panel/kb      助教经验知识库的主题清单或某个主题全文（只读）
+ *   GET  /ta-panel/kb      知识库的主题清单或某个主题全文（只读）
  *   GET  /ta-panel/params  可热改字段（volatile）与 revision
  *   POST /ta-panel/params  提交字段修改；并发修改返回 409
  *   GET  /ta-panel/tools   agent preset 的工具行树

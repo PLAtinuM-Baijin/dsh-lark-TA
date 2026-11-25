@@ -93,7 +93,7 @@ window.__ModuleLoader__.load({
       '@deepseek-ai/dsh-tool-workflow': { label: '工作流工具', desc: '创建与推进工作流。' },
       '@local/dsh-lark-ta/memory-context': { label: '记忆注入', desc: '每轮注入全局与本 chat 的记忆。' },
       '@local/dsh-lark-ta/memory-tool': { label: '记忆读写', desc: 'feishu_memory 工具；普通会话只能写本 chat。' },
-      '@local/dsh-lark-ta/kb-tool': { label: '经验知识库', desc: 'feishu_kb 工具：按主题维护工作区 kb/，只有夜间整理会话可写。' },
+      '@local/dsh-lark-ta/kb-tool': { label: '知识库', desc: 'feishu_kb 工具：按主题维护工作区 kb/，只有夜间整理会话可写。' },
       '@local/dsh-lark-ta/history-context': { label: '聊天历史注入', desc: '注入最近聊天记录与 message_id。' },
       '@local/dsh-lark-ta/reply-tool': { label: '引用回复', desc: '选择引用某条消息回复。' },
       '@local/dsh-lark-ta/send-file': { label: '发送文件', desc: '把工作区文件发回飞书。' },
@@ -1182,7 +1182,7 @@ window.__ModuleLoader__.load({
                 ? '—'
                 : `${formatTime(curator.lastImportAt)} · ${curator.lastImportChars ?? 0} 字符`,
             ],
-            ['数据来源', '登记群聊的本地聊天历史（含未 @ 的消息）与面板导入的 Markdown 导出，产出长期记忆与 kb/ 经验知识库'],
+            ['数据来源', '登记群聊的本地聊天历史（含未 @ 的消息）与面板导入的 Markdown 导出，产出长期记忆与 kb/ 知识库'],
           ],
         }),
         importOpen
@@ -1221,7 +1221,7 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { className: 'fsp-hint' },
-                `与当轮聊天历史一起交给整理员：公开群内容可进全局记忆，内部群内容只写该群记忆；知识库只收老师/助教确认的结论。单次最多 ${importLimit} 字符，超长请分批导入。`,
+                `与当轮聊天历史一起交给整理员：公开群内容可进全局记忆，内部群内容只写该群记忆；知识库只收助教/老师的群内表述（机器人回答不算来源）。单次最多 ${importLimit} 字符，超长请分批导入。`,
               ),
               h(
                 'div',
@@ -1488,7 +1488,7 @@ window.__ModuleLoader__.load({
           at: curator.nextRunAt,
           kind: '夜间整理',
           target: curator.sessionId ?? 'feishu-root',
-          text: `读取群聊历史，整理长期记忆与经验知识库（${curator.curatorTime ?? '—'} · ${curator.timeZone ?? '—'}）`,
+          text: `读取群聊历史，整理长期记忆与知识库（${curator.curatorTime ?? '—'} · ${curator.timeZone ?? '—'}）`,
         })
       }
       schedule.sort((left, right) => left.at - right.at)
@@ -1899,11 +1899,11 @@ window.__ModuleLoader__.load({
           h(
             'div',
             null,
-            h('h2', { className: 'fsp-h2' }, '经验知识库'),
+            h('h2', { className: 'fsp-h2' }, '知识库'),
             h(
               'p',
               { className: 'fsp-desc' },
-              '夜间整理会话从班级大群与助教/老师小群提炼的助教经验（配环境、工具链、提交流程等），按主题分文件。这里只读展示；答疑时助教按需查阅，不常驻注入。',
+              '夜间整理会话从班级大群与助教/老师小群提炼的助教经验与课程知识（配环境、工具链、概念讲解等），按主题分文件。来源只认助教/老师的表述。这里只读展示；答疑时助教按需查阅，不常驻注入。',
             ),
           ),
           h('span', { className: 'fsp-count-pill' }, `${topics.length} 个主题`),

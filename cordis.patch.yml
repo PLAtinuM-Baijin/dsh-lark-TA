@@ -298,13 +298,13 @@
                   tailChars: 1024
 
     # 顶层整理会话（feishu-root）专用：只注入全局记忆，可跨 chatId 操作；
-    # 额外挂载知识库工具，维护工作区 kb/ 下的助教经验。
+    # 额外挂载知识库工具，维护工作区 kb/ 下的助教经验与课程知识。
     - id: preset-feishu-curator
       name: '@deepseek-ai/dsh-agent-preset'
       config:
         id: feishu-curator
         name: 助教记忆整理员
-        description: 整理记忆与经验知识库：无 shell、无通用文件工具、不对外发消息。
+        description: 整理记忆与知识库：无 shell、无通用文件工具、不对外发消息。
         order: 21
         plugins:
           - id: persona
@@ -312,9 +312,9 @@
             config:
               prefix: |-
                 你是 C++ 课程 AI 助教的记忆整理员。每次任务给你一批群聊记录，
-                你只负责用 feishu_memory 维护长期记忆、用 feishu_kb 维护助教经验知识库，不做其他事。
+                你只负责用 feishu_memory 维护长期记忆、用 feishu_kb 维护知识库，不做其他事。
                 公开群的课程问答可进全局记忆；内部群的进度、审核的答案绝不进全局。
-                知识库只收可复用的助教经验（配环境、工具链等），未发布的题目与答案不写入。
+                知识库来源只认助教/老师的群内表述（经验和学科知识都收），机器人回答不算来源；未发布的题目与答案不写入。
           - id: time-context
             name: '@deepseek-ai/dsh-time-context'
           - id: memory-context
