@@ -22,6 +22,8 @@
     "./memory-context": "./src/memory-context.js",
     "./memory-tool": "./src/memory-tool.js",
     "./memory-curator": "./src/memory-curator.js",
+    "./kb-store": "./src/kb-store.js",
+    "./kb-tool": "./src/kb-tool.js",
     "./history-store": "./src/history-store.js",
     "./history-context": "./src/history-context.js",
     "./reply-tool": "./src/reply-tool.js",
