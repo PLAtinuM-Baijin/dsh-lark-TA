@@ -17,26 +17,29 @@ C++ 课程 AI 助教的 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) �
 ## 目录
 
 ```
-index.js              channel 主插件（连接、路由、会话、面板数据）
-scheduler.js          定时任务持久化与触发
-memory-store.js       记忆 Markdown 存储
-memory-context.js     每轮注入记忆
-memory-tool.js        feishu_memory 工具
-memory-curator.js     每晚记忆整理
-history-store.js      本地聊天历史
-history-context.js    每轮注入最近聊天记录
-reply-tool.js         引用回复 / 新消息
-send-file.js          发送工作区文件
-send-text.js          主动发新消息（仅小群）
-schedule-tool.js      定时任务工具（仅小群）
-ta-fs.js             受控文件读写
-ta-fs-scope.js        路径作用域校验
-doc-exec.js           受限文档命令
-luogu.js              洛谷题库检索
-view-image.js         按需看图
-panel-runtime.js      面板与 channel 的模块级桥
-curator-runtime.js    面板与整理器的模块级桥
+src/
+  index.js            channel 主插件（连接、路由、会话、面板数据）
+  scheduler.js        定时任务持久化与触发
+  memory-store.js     记忆 Markdown 存储
+  memory-context.js   每轮注入记忆
+  memory-tool.js      feishu_memory 工具
+  memory-curator.js   每晚记忆整理
+  history-store.js    本地聊天历史
+  history-context.js  每轮注入最近聊天记录
+  reply-tool.js       引用回复 / 新消息
+  send-file.js        发送工作区文件
+  send-text.js        主动发新消息（仅小群）
+  schedule-tool.js    定时任务工具（仅小群）
+  ta-fs.js            受控文件读写
+  ta-fs-scope.js      路径作用域校验
+  doc-exec.js         受限文档命令
+  luogu.js            洛谷题库检索
+  view-image.js       按需看图
+  channel-runtime.js  channel 与工具插件的模块级桥
+  panel-runtime.js    面板与 channel 的模块级桥
+  curator-runtime.js  面板与整理器的模块级桥
 ui/                   控制面板（Host 路由 + 浏览器 bundle，独立包）
+test/                 路径作用域单测
 TA.md                 助教守则（注入系统提示）
 流程安排.md           助教工作流程手册（注入系统提示）
 cordis.patch.yml      profile 补丁：插件条目、面板、三个 preset
@@ -147,7 +150,7 @@ cordis.patch.yml      profile 补丁：插件条目、面板、三个 preset
 
 ```bash
 npm test          # ta-fs-scope 路径作用域测试
-node --check index.js
+node --check src/index.js
 ```
 
 控制面板 `ui/client.js` 是无构建步骤的浏览器 bundle（React.createElement），`ui/index.js` 是 Host 路由半身。

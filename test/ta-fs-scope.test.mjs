@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { createPathScope, matchGlob } from '../ta-fs-scope.js'
+import { createPathScope, matchGlob } from '../src/ta-fs-scope.js'
 
 const base = await fs.mkdtemp(path.join(os.tmpdir(), 'ta-fs-'))
 let symlinks = false
