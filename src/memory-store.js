@@ -2,8 +2,10 @@
  * 飞书长期记忆的 Markdown 存储层。
  *
  * 目录结构（TA_MEMORY_DIR，默认 ~/.dsh-lark-ta-memory）：
- *   global.md          ## Persona / ## User profile / ## Facts
+ *   global.md          ## Facts
  *   chats/<chat_id>.md ## Facts
+ *
+ * 旧版的 Persona / User profile 版块已移除：读取时忽略，下次写入时一并丢弃。
  *
  * 所有写操作走模块级串行队列（同一进程内不会互相踩），写入用临时文件 + rename
  * 原子替换。读操作按 mtime 缓存，因为 memory-context 在每次组装提示词时都要同步读。
@@ -13,12 +15,11 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-export const SECTION_TITLES = { persona: 'Persona', user: 'User profile', facts: 'Facts' }
-const GLOBAL_TITLES = ['Persona', 'User profile', 'Facts']
+const GLOBAL_TITLES = ['Facts']
 
 const MAX_ENTRY_CHARS = 500
 const MAX_ENTRIES = {
-  global: { Persona: 20, 'User profile': 40, Facts: 60 },
+  global: { Facts: 60 },
   chat: { Facts: 30 },
 }
 const MAX_BYTES = { global: 16 * 1024, chat: 8 * 1024 }
@@ -44,10 +45,6 @@ export function setMemoryDir(dir) {
 
 export function isValidChatId(chatId) {
   return typeof chatId === 'string' && CHAT_ID.test(chatId)
-}
-
-export function isValidSection(section) {
-  return Object.hasOwn(SECTION_TITLES, section)
 }
 
 // --- 时间 ---------------------------------------------------------------
@@ -76,7 +73,7 @@ function chatFile(chatId) {
 }
 
 function emptySections() {
-  return { Persona: [], 'User profile': [], Facts: [] }
+  return { Facts: [] }
 }
 
 function cloneSections(sections) {
@@ -155,15 +152,7 @@ function applyCaps(kind, sections, chatId) {
       trimmed = true
     }
   }
-  if (kind === 'chat') {
-    for (const title of GLOBAL_TITLES) {
-      if (title !== 'Facts' && sections[title]?.length) {
-        sections[title] = []
-        trimmed = true
-      }
-    }
-  }
-  const order = kind === 'global' ? ['Facts', 'User profile', 'Persona'] : ['Facts']
+  const order = ['Facts']
   let text = serialize(kind, sections, chatId)
   while (Buffer.byteLength(text, 'utf8') > MAX_BYTES[kind]) {
     let dropped = false
@@ -244,7 +233,7 @@ export function normalizeText(text) {
 }
 
 export function renderGlobal(limit = RENDER_LIMITS.global) {
-  return renderSections(readSections(globalFile()), GLOBAL_TITLES, limit, ['Facts', 'User profile', 'Persona'])
+  return renderSections(readSections(globalFile()), GLOBAL_TITLES, limit, ['Facts'])
 }
 
 export function renderChat(chatId, limit = RENDER_LIMITS.chat) {
@@ -252,15 +241,13 @@ export function renderChat(chatId, limit = RENDER_LIMITS.chat) {
   return renderSections(readSections(chatFile(chatId)), ['Facts'], limit, ['Facts'])
 }
 
-export function listGlobal(section) {
-  const sections = readSections(globalFile())
-  return pickEntries(sections, section === undefined ? GLOBAL_TITLES : [SECTION_TITLES[section]])
+export function listGlobal() {
+  return pickEntries(readSections(globalFile()), GLOBAL_TITLES)
 }
 
-export function listChat(chatId, section = 'facts') {
+export function listChat(chatId) {
   if (!isValidChatId(chatId)) return []
-  const sections = readSections(chatFile(chatId))
-  return pickEntries(sections, [SECTION_TITLES[section]])
+  return pickEntries(readSections(chatFile(chatId)), ['Facts'])
 }
 
 /** 有独立记忆文件的 chat 清单（面板展示用），按最近修改倒序。 */
@@ -295,15 +282,12 @@ function pickEntries(sections, titles) {
   return out
 }
 
-export async function remember({ scope, chatId, section, text }) {
+export async function remember({ scope, chatId, text }) {
   const clean = normalizeText(text)
   if (clean === '') throw new Error('记忆内容为空')
   if (scope === 'chat') {
     if (!isValidChatId(chatId)) throw new Error('无效的 chatId')
-    if (section !== 'facts') throw new Error('chat 记忆只支持 facts')
-  } else if (scope === 'global') {
-    if (!isValidSection(section)) throw new Error('无效的 section')
-  } else {
+  } else if (scope !== 'global') {
     throw new Error('无效的 scope')
   }
 
@@ -311,7 +295,7 @@ export async function remember({ scope, chatId, section, text }) {
   const kind = scope === 'global' ? 'global' : 'chat'
   return enqueue(async () => {
     const sections = cloneSections(readSections(file))
-    const title = SECTION_TITLES[section]
+    const title = 'Facts'
     const list = sections[title]
     const duplicate = list.some((entry) => entry.text.toLowerCase() === clean.toLowerCase())
     if (!duplicate) list.push({ date: todayStamp(), text: clean })
@@ -326,15 +310,12 @@ export async function remember({ scope, chatId, section, text }) {
   })
 }
 
-export async function forget({ scope, chatId, section, text }) {
+export async function forget({ scope, chatId, text }) {
   const needle = normalizeText(text).toLowerCase()
   if (needle === '') throw new Error('要删除的内容为空')
   if (scope === 'chat') {
     if (!isValidChatId(chatId)) throw new Error('无效的 chatId')
-    if (section !== 'facts') throw new Error('chat 记忆只支持 facts')
-  } else if (scope === 'global') {
-    if (!isValidSection(section)) throw new Error('无效的 section')
-  } else {
+  } else if (scope !== 'global') {
     throw new Error('无效的 scope')
   }
 
@@ -342,7 +323,7 @@ export async function forget({ scope, chatId, section, text }) {
   const kind = scope === 'global' ? 'global' : 'chat'
   return enqueue(async () => {
     const sections = cloneSections(readSections(file))
-    const title = SECTION_TITLES[section]
+    const title = 'Facts'
     const before = sections[title]
     sections[title] = before.filter((entry) => !entry.text.toLowerCase().includes(needle))
     const removed = before.length - sections[title].length

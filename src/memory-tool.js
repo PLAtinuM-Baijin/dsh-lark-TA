@@ -7,7 +7,7 @@
  *
  * 作用域守卫是硬约束，不依赖提示词（助教版）：
  *   - 普通聊天会话（班级群、助教/老师小群、学生私聊）：只能读写自己的 chat 记忆，
- *     section 只能是 facts；全局记忆一律拒绝写入。
+ *     全局记忆一律拒绝写入。
  *   - 顶层整理会话（默认 feishu-root）：可以操作任意合法 chatId 和全局记忆。
  * 全局知识只能由夜间整理会话从班级大群/助教小群提炼，避免内部信息被群会话直接公开。
  */
@@ -16,7 +16,6 @@ import {
   RENDER_LIMITS,
   forget,
   isValidChatId,
-  isValidSection,
   listChat,
   listGlobal,
   remember,
@@ -47,11 +46,6 @@ const PARAMETERS = {
       type: 'string',
       enum: ['chat', 'global'],
       description: 'chat=当前会话/指定会话的隔离记忆；global=所有会话共享的记忆。缺省 chat。',
-    },
-    section: {
-      type: 'string',
-      enum: ['facts', 'user', 'persona'],
-      description: 'facts=一般事实；user=用户画像；persona=机器人人格。chat 只支持 facts。缺省 facts。',
     },
     text: {
       type: 'string',
@@ -110,16 +104,13 @@ async function execute(args, exec, options) {
   }
   const scope = args.scope ?? 'chat'
   if (scope !== 'chat' && scope !== 'global') throw new Error('feishu_memory: scope 必须是 chat 或 global')
-  const sectionExplicit = args.section !== undefined
-  const section = args.section ?? 'facts'
-  if (!isValidSection(section)) throw new Error('feishu_memory: section 必须是 facts / user / persona')
 
   const agent = exec.agent
   if (agent === undefined) throw new Error('feishu_memory: 没有调用方会话，记忆功能不可用')
   const caller = resolveCaller(agent.session.id, options.curatorSessionId)
 
   if (action === 'list') {
-    return listAction({ scope, section, sectionExplicit, chatId: args.chatId, caller })
+    return listAction({ scope, chatId: args.chatId, caller })
   }
 
   if (typeof args.text !== 'string' || args.text.trim() === '') {
@@ -130,21 +121,20 @@ async function execute(args, exec, options) {
     assertGlobalWrite(caller)
     const result =
       action === 'remember'
-        ? await remember({ scope: 'global', section, text: args.text })
-        : await forget({ scope: 'global', section, text: args.text })
-    return finishWrite(action, scope, undefined, section, result)
+        ? await remember({ scope: 'global', text: args.text })
+        : await forget({ scope: 'global', text: args.text })
+    return finishWrite(action, scope, undefined, result)
   }
 
   const targetChatId = chatTarget(caller, args.chatId)
-  if (section !== 'facts') throw new Error('feishu_memory: chat 记忆只支持 facts')
   const result =
     action === 'remember'
-      ? await remember({ scope: 'chat', chatId: targetChatId, section: 'facts', text: args.text })
-      : await forget({ scope: 'chat', chatId: targetChatId, section: 'facts', text: args.text })
-  return finishWrite(action, scope, targetChatId, section, result)
+      ? await remember({ scope: 'chat', chatId: targetChatId, text: args.text })
+      : await forget({ scope: 'chat', chatId: targetChatId, text: args.text })
+  return finishWrite(action, scope, targetChatId, result)
 }
 
-function finishWrite(action, scope, chatId, section, result) {
+function finishWrite(action, scope, chatId, result) {
   const value = {
     ok: true,
     scope,
@@ -165,16 +155,15 @@ function finishWrite(action, scope, chatId, section, result) {
   return value
 }
 
-function listAction({ scope, section, sectionExplicit, chatId, caller }) {
+function listAction({ scope, chatId, caller }) {
   if (scope === 'global') {
     if (caller.kind === 'unknown') throw new Error('feishu_memory: 无法识别当前会话，记忆功能不可用')
-    const entries = listGlobal(sectionExplicit ? section : undefined)
+    const entries = listGlobal()
     return listResult('global', undefined, entries, renderGlobal().length, RENDER_LIMITS.global)
   }
 
   const targetChatId = chatTarget(caller, chatId)
-  if (section !== 'facts') throw new Error('feishu_memory: chat 记忆只支持 facts')
-  const entries = listChat(targetChatId, 'facts')
+  const entries = listChat(targetChatId)
   return listResult('chat', targetChatId, entries, renderChat(targetChatId).length, RENDER_LIMITS.chat)
 }
 
@@ -183,7 +172,7 @@ function listResult(scope, chatId, entries, totalChars, limit) {
     ok: true,
     scope,
     message: `共 ${entries.length} 条记忆`,
-    entries: entries.map((entry) => `[${entry.section}] [${entry.date}] ${entry.text}`),
+    entries: entries.map((entry) => `[${entry.date}] ${entry.text}`),
     totalChars,
     limit,
   }
