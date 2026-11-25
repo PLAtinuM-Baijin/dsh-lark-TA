@@ -7,6 +7,7 @@ C++ 课程 AI 助教的 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) �
 ## 功能
 
 - **多会话路由**：每个飞书 chat 一个按天新建的会话（`feishu-<chatId>-<YYYYMMDD>`），群聊仅 @ 触发，私聊有每日条数上限。
+- **入站形态**：文本、富文本、图片、文件；支持引用回复（按 `parent_id` 读回被引用内容，含图片）与合并转发（展开子消息）；语音/视频消息忽略。
 - **两套 preset**：普通会话（课程群、学生私聊）无 shell、无原生文件工具、无飞书 MCP；助教/老师小群额外挂载精简版飞书 MCP（文档、日历、任务、wiki、通讯录、读消息）。
 - **受限文件工具**：`ta_fs` 只读课程目录、只写工作区；`doc_exec` 只允许 unzip/pdftotext/pdfinfo/file；`view_image` 按需把图片交给多模态模型；`luogu` 检索洛谷题库。
 - **长期记忆**：全局记忆 + 每个 chat 的记忆（Markdown 存储，原子写入）。普通会话只能写本 chat，全局记忆只由每晚的整理会话提炼。

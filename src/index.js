@@ -17,6 +17,8 @@
  * 媒体：下载到的附件一律归档到 attachmentsDir（缺省 ~/.dsh-lark-ta-files，不自动清理；
  *      撤回时删除该消息的归档副本）。图片作为 image block 交给模型，文本文件内联开头，
  *      其余文件只说明格式读不了（未来由课件抽取工具处理归档路径）。
+ * 引用/转发：带 parent_id 的消息在准备阶段按 id 读回被引用内容；合并转发展开子消息。
+ *      两者都只读文字和图片；语音/视频消息直接忽略。
  * 主动：定时任务由本插件持有（scheduler.js，默认 ~/.dsh-lark-ta-schedules.json），
  *      到点唤醒目标 chat“当天”的 Session；这轮回复不引用消息，用 im.message.create
  *      直接发到聊天。feishu_send_text 工具也可以随时主动发一条 Markdown 消息。
@@ -110,7 +112,7 @@ const SCHEDULE_TICK_MS = 5000
 const TURN_TIMEOUT = Symbol('feishu-channel/turn-timeout')
 /** 超时取消后，等取消动作落盘（可能带一小段部分文本）的上限。 */
 const CANCEL_SETTLE_MS = 5000
-/** 普通文件、语音、视频的下载上限；流式写盘，不占进程内存。 */
+/** 普通文件的下载上限；流式写盘，不占进程内存。 */
 const FILE_DOWNLOAD_LIMIT = 50 * 1024 * 1024
 /** 图片上限仍按 attachment 的单图限制，超过就无法作为 image block 交给模型。 */
 const IMAGE_DOWNLOAD_LIMIT = 20 * 1024 * 1024
@@ -129,8 +131,14 @@ const OCR_MAX_IMAGES = 24
 const OCR_TIMEOUT_MS = 20_000
 const OCR_TOTAL_BUDGET_MS = 90_000
 const OCR_MAX_CHARS = 40_000
-/** 只处理这些消息类型；卡片、系统消息等直接忽略。 */
-const HANDLED_MESSAGE_TYPES = new Set(['text', 'post', 'image', 'file', 'audio', 'media', 'merge_forward'])
+/** 只处理这些消息类型；卡片、系统消息、语音/视频等直接忽略。 */
+const HANDLED_MESSAGE_TYPES = new Set(['text', 'post', 'image', 'file', 'merge_forward'])
+/** 引用消息最多读回的文字与图片数；与个人版一致，避免长引用挤占上下文。 */
+const QUOTE_TEXT_LIMIT = 4000
+const QUOTE_IMAGE_LIMIT = 4
+/** 合并转发最多展开的条数与总字数；超出部分明确提示未展开。 */
+const MERGE_FORWARD_LIMIT = 50
+const MERGE_FORWARD_TEXT_LIMIT = 12_000
 /** 能直接作为 image block 交给模型的格式（与 attachment-local 的 imageLimits 一致）。 */
 const IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const IMAGE_FILE_TYPES = new Map([
@@ -654,6 +662,11 @@ export function apply(ctx, config) {
 
   /** 撤回提醒里只带一小段摘要，别把整条长消息塞进提示。 */
   function summarizeInbound(inbound) {
+    const base = summarizeInboundKind(inbound)
+    return inbound.quoteId === undefined ? base : `（引用了另一条消息）${base}`
+  }
+
+  function summarizeInboundKind(inbound) {
     switch (inbound.kind) {
       case 'text':
         return shorten(inbound.text.replaceAll('\n', ' '), 120)
@@ -666,73 +679,44 @@ export function apply(ctx, config) {
         return `文件「${safeFileName(inbound.fileName) || '未命名'}」`
       case 'image':
         return '一张图片'
-      case 'audio':
-        return '一条语音'
-      case 'media':
-        return '一个视频'
+      case 'merge_forward':
+        return '合并转发的聊天记录'
       default:
-        return shorten(inbound.text.replaceAll('\n', ' '), 120)
+        return shorten(String(inbound.text ?? '').replaceAll('\n', ' '), 120)
     }
   }
 
   /** 事件阶段只解析结构；真正的资源下载等排到这个 chat 的队列里再做。 */
   function parseInbound(message) {
+    // 引用/回复会带 parent_id；被引用内容稍后在 prepareInbound 里按 id 读回。
+    const quoteId = typeof message.parent_id === 'string' && message.parent_id !== '' ? message.parent_id : undefined
+    const quote = quoteId === undefined ? {} : { quoteId }
     switch (message.message_type) {
       case 'text': {
         const text = parseText(message.content, message.mentions)
-        if (text === '') return null
-        return { kind: 'text', text }
+        // 只有引用、没写正文也可以回答。
+        if (text === '' && quoteId === undefined) return null
+        return { kind: 'text', text, ...quote }
       }
       case 'post': {
         // 富文本可以把 @ 和图片放在同一条消息里，是群聊里唯一能带图触达的形态。
         const { text, imageKeys } = parsePost(message.content, message.mentions)
-        if (text === '' && imageKeys.length === 0) return null
-        return { kind: 'post', text, imageKeys }
+        if (text === '' && imageKeys.length === 0 && quoteId === undefined) return null
+        return { kind: 'post', text, imageKeys, ...quote }
       }
       case 'image': {
         const content = parseJson(message.content)
         if (typeof content?.image_key !== 'string') return null
-        return { kind: 'image', fileKey: content.image_key }
+        return { kind: 'image', fileKey: content.image_key, ...quote }
       }
       case 'file': {
         const content = parseJson(message.content)
         if (typeof content?.file_key !== 'string') return null
-        return { kind: 'file', fileKey: content.file_key, fileName: content.file_name }
-      }
-      case 'audio': {
-        const content = parseJson(message.content)
-        const duration = Number(content?.duration)
-        const seconds = Number.isFinite(duration) && duration > 0 ? Math.round(duration / 1000) : undefined
-        const notice = `用户发来一条语音${seconds === undefined ? '' : `（约 ${seconds} 秒）`}。我现在还不能收听或转写语音，请直接告诉用户。`
-        if (typeof content?.file_key !== 'string') return { kind: 'other', text: notice }
-        return {
-          kind: 'audio',
-          fileKey: content.file_key,
-          fileName: typeof content.file_name === 'string' && content.file_name !== '' ? content.file_name : undefined,
-          durationSeconds: seconds,
-          notice,
-        }
-      }
-      case 'media': {
-        const content = parseJson(message.content)
-        const name = typeof content?.file_name === 'string' && content.file_name !== '' ? content.file_name : undefined
-        const shownName = name === undefined ? '' : safeFileName(name)
-        const duration = Number(content?.duration)
-        const seconds = Number.isFinite(duration) && duration > 0 ? Math.round(duration / 1000) : undefined
-        const nameText = shownName === '' ? '' : `「${shownName}」`
-        const durationText = seconds === undefined ? '' : `（约 ${seconds} 秒）`
-        const notice = `用户发来一个视频${nameText}${durationText}。我现在还不能处理视频，请直接告诉用户。`
-        if (typeof content?.file_key !== 'string') return { kind: 'other', text: notice }
-        return {
-          kind: 'media',
-          fileKey: content.file_key,
-          fileName: name,
-          durationSeconds: seconds,
-          notice,
-        }
+        return { kind: 'file', fileKey: content.file_key, fileName: content.file_name, ...quote }
       }
       case 'merge_forward':
-        return { kind: 'other', text: '用户转发了一组聊天记录。我现在还读不了合并转发，请直接告诉用户。' }
+        // 事件里的 content 固定是 "Merged and Forwarded Message"；子消息在准备阶段按 id 读。
+        return { kind: 'merge_forward', ...quote }
       default:
         return null
     }
@@ -1275,12 +1259,6 @@ export function apply(ctx, config) {
     return clipText(entries.map(([, value]) => value).join('\n'), CARD_TEXT_LIMIT)
   }
 
-  /** 按码点截断，避免把 emoji 的代理对切成半个导致卡片更新失败。 */
-  function clipText(text, limit) {
-    const chars = Array.from(text)
-    return chars.length <= limit ? text : chars.slice(0, limit).join('')
-  }
-
   /** 卡片 JSON 2.0：流式模式 + 一个可流式更新的 markdown 元素。 */
   function cardJson() {
     return {
@@ -1431,8 +1409,23 @@ export function apply(ctx, config) {
   }
 
   // --- 入站媒体 ---------------------------------------------------------
-  /** 把一条入站消息变成「给模型的文字 + 待入库的图片」；下载/归档/格式问题只降级不抛错。 */
+  /** 把一条入站消息变成「给模型的文字 + 待入库的图片」；引用内容先读回，再处理本条。 */
   async function prepareInbound(messageId, inbound) {
+    const prepared = await prepareMainInbound(messageId, inbound)
+    if (inbound.quoteId === undefined) return prepared
+    // 被引用的消息按 parent_id 单独读回；失败只降级成一句说明，不影响本条消息。
+    const quoted = await prepareQuoted(inbound.quoteId)
+    return {
+      ...prepared,
+      text: [quoted.text, prepared.text].filter((part) => part !== '').join('\n\n'),
+      images: [...quoted.images, ...prepared.images],
+    }
+  }
+
+  async function prepareMainInbound(messageId, inbound) {
+    if (inbound.kind === 'merge_forward') {
+      return { text: await describeMergedForward(messageId), images: [], archived: [] }
+    }
     if (inbound.kind === 'text' || inbound.kind === 'other') return { text: inbound.text, images: [], archived: [] }
 
     try {
@@ -1473,11 +1466,6 @@ export function apply(ctx, config) {
         const archived = path === undefined ? [] : [path]
         if (mediaType === undefined) return { text: '用户发来一张图片，但我没能识别出它的格式。', images: [], archived }
         return { text: '用户发来一张图片，请查看。', images: [{ data: buffer, mediaType }], archived }
-      }
-
-      if (inbound.kind === 'audio' || inbound.kind === 'media') {
-        // 助教没有音频/视频处理工具，下载下来也没有意义。
-        return { text: inbound.notice, images: [], archived: [] }
       }
 
       // kind === 'file'
@@ -1532,13 +1520,89 @@ export function apply(ctx, config) {
       const reason = errorText(error)
       log.warn(`feishu-channel: failed to fetch resource for ${messageId}: ${reason}`)
       console.warn(`feishu-channel: failed to fetch resource for ${messageId}: ${reason}`)
-      const failure =
-        inbound.kind === 'image' ? '用户发来一张图片，但下载失败了'
-          : inbound.kind === 'audio' ? '用户发来一条语音，但下载失败了'
-            : inbound.kind === 'media' ? '用户发来一个视频，但下载失败了'
-              : '用户发来一个文件，但下载失败了'
+      const failure = inbound.kind === 'image' ? '用户发来一张图片，但下载失败了' : '用户发来一个文件，但下载失败了'
       return { text: `${failure}（${shorten(reason, 500)}）。请如实告诉用户，不要猜测内容。`, images: [], archived: [] }
     }
+  }
+
+  /**
+   * 引用消息：按 parent_id 走「获取指定消息的内容」单条读回，不用拉群历史的重权限。
+   * 引用里的图片也下载给模型看。
+   */
+  async function prepareQuoted(quoteId) {
+    try {
+      const items = await getMessageItems(quoteId)
+      const [item] = items
+      const { text, imageKeys } =
+        item.msg_type === 'merge_forward'
+          ? { text: renderMergedForward(items, item.message_id ?? quoteId), imageKeys: [] }
+          : messageItemText(item)
+      const quotedMessageId = item.message_id ?? quoteId
+      const images = []
+      let failed = 0
+      for (const [index, imageKey] of imageKeys.slice(0, QUOTE_IMAGE_LIMIT).entries()) {
+        try {
+          const { buffer, contentType } = await downloadToBuffer(
+            quotedMessageId,
+            imageKey,
+            'image',
+            IMAGE_DOWNLOAD_LIMIT,
+          )
+          const mediaType = imageMediaType(contentType, buffer)
+          await archiveBuffer(buffer, historyName(quotedMessageId, index, '', mediaType ?? contentType))
+          if (mediaType !== undefined) images.push({ data: buffer, mediaType })
+        } catch (error) {
+          failed += 1
+          log.warn(`feishu-channel: failed to fetch quoted image ${imageKey}: ${errorText(error)}`)
+        }
+      }
+      const sender = item.sender?.sender_type === 'app' ? '机器人' : item.sender?.id ?? '未知'
+      const note = failed === 0 ? '' : `（另有 ${failed} 张图片读取失败）`
+      return {
+        text: `[引用消息｜发送者 ${sender}]\n${clipText(text, QUOTE_TEXT_LIMIT)}${note}`,
+        images,
+      }
+    } catch (error) {
+      const reason = errorText(error)
+      log.warn(`feishu-channel: failed to read quoted message ${quoteId}: ${reason}`)
+      console.warn(`feishu-channel: failed to read quoted message ${quoteId}: ${reason}`)
+      return {
+        text: `[用户引用了一条消息，但读取失败：${shorten(reason, 300)}。请如实告诉用户你看不到被引用的内容，不要猜测。]`,
+        images: [],
+      }
+    }
+  }
+
+  /** 合并转发：同一接口返回父消息和全部子消息（子消息的 upper_message_id 指向父消息）。 */
+  async function describeMergedForward(messageId) {
+    try {
+      return renderMergedForward(await getMessageItems(messageId), messageId)
+    } catch (error) {
+      const reason = errorText(error)
+      log.warn(`feishu-channel: failed to read merged forward ${messageId}: ${reason}`)
+      console.warn(`feishu-channel: failed to read merged forward ${messageId}: ${reason}`)
+      return `[用户合并转发了一组聊天记录，但读取失败：${shorten(reason, 300)}。请如实告诉用户，不要猜测里面的内容。]`
+    }
+  }
+
+  /**
+   * 按 message_id 读消息；HTTP 错误和业务错误都转成可读原因。
+   * 卡片消息要带 card_msg_content_type=user_card_content 才返回可解析的卡片正文。
+   */
+  async function getMessageItems(messageId) {
+    let res
+    try {
+      res = await client.im.message.get({
+        path: { message_id: messageId },
+        params: { card_msg_content_type: 'user_card_content' },
+      })
+    } catch (error) {
+      throw new Error(await describeLarkError(error))
+    }
+    checkLark(res)
+    const items = res?.data?.items
+    if (!Array.isArray(items) || items.length === 0) throw new Error('消息不存在或不可读')
+    return items
   }
 
   /** 附件归档失败不影响这一轮回复：记一笔日志，继续用内存里的数据。 */
@@ -1964,7 +2028,9 @@ export function apply(ctx, config) {
 
 /** 未 @ 的群消息进本地历史时带上归档位置，模型被 @ 后能直接找到群文件。 */
 function passiveHistoryText(inbound, prepared) {
-  const base = historyTextOfInbound(inbound)
+  // 合并转发只有准备阶段才读得到正文；历史里留一段开头，夜间整理也能看到。
+  const merged = inbound.kind === 'merge_forward' ? shorten(String(prepared.text ?? '').replaceAll('\n', ' '), 480) : ''
+  const base = merged === '' ? historyTextOfInbound(inbound) : `[合并转发聊天记录] ${merged}`
   const archived = prepared.archived ?? []
   if (archived.length === 0) return base
   const text = prepared.textPath === undefined ? '' : `；抽取文字：${prepared.textPath}`
@@ -1973,6 +2039,11 @@ function passiveHistoryText(inbound, prepared) {
 
 /** 本地历史里只存可读的正文；附件用占位符，避免把 meta 提示也记进去。 */
 function historyTextOfInbound(inbound) {
+  const base = historyTextOfKind(inbound)
+  return inbound.quoteId === undefined ? base : `[引用一条消息] ${base}`
+}
+
+function historyTextOfKind(inbound) {
   switch (inbound.kind) {
     case 'text':
       return inbound.text
@@ -1983,10 +2054,8 @@ function historyTextOfInbound(inbound) {
       return `[文件] ${safeFileName(inbound.fileName) || '未命名'}`
     case 'image':
       return '[图片]'
-    case 'audio':
-      return '[语音]'
-    case 'media':
-      return '[视频]'
+    case 'merge_forward':
+      return '[合并转发聊天记录]'
     default:
       return inbound.text
   }
@@ -2029,6 +2098,119 @@ function parsePost(content, mentions) {
     if (mention?.key) text = text.replaceAll(mention.key, mention.name ?? '')
   }
   return { text, imageKeys }
+}
+
+/** 合并转发渲染：items 是 message.get 返回的父消息 + 子消息列表。 */
+function renderMergedForward(items, messageId) {
+  const children = items.filter((item) => item.upper_message_id === messageId)
+  const list = children.length > 0 ? children : items.filter((item) => item.message_id !== messageId)
+  if (list.length === 0) {
+    return '[用户合并转发了一组聊天记录，但里面读不到任何消息。请如实告诉用户。]'
+  }
+  const lines = [
+    `[合并转发的聊天记录，共 ${list.length} 条${list.length > MERGE_FORWARD_LIMIT ? `，只展开前 ${MERGE_FORWARD_LIMIT} 条` : ''}]`,
+  ]
+  let used = 0
+  for (const [index, item] of list.entries()) {
+    if (index >= MERGE_FORWARD_LIMIT) break
+    const { text } = messageItemText(item)
+    const sender = item.sender?.sender_type === 'app' ? '机器人' : item.sender?.id ?? '未知'
+    const line = `${index + 1}. (${sender}) ${clipText(text.replaceAll('\n', '\n   '), 2000)}`
+    if (used + line.length > MERGE_FORWARD_TEXT_LIMIT) {
+      lines.push(`（其余 ${list.length - index} 条超过读取上限，未展开）`)
+      break
+    }
+    used += line.length
+    lines.push(line)
+  }
+  return lines.join('\n')
+}
+
+/**
+ * 从卡片 JSON 里尽量收集可读文字：兼容 message.get 的「接收结构」
+ * （title + 二维 elements，元素带 tag/text），以及卡片原始 DSL 1.0/2.0
+ * （header.title、div/markdown 的 text.content、button/note/column 等）。
+ * 只收文字和少量占位符，不还原卡片样式；提取不到时返回空串。
+ */
+function cardText(content) {
+  const parts = []
+  const seen = new WeakSet()
+  const push = (value) => {
+    const text = typeof value === 'string' ? value.trim() : ''
+    if (text !== '') parts.push(text)
+  }
+  const walk = (node, depth) => {
+    if (node === null || typeof node !== 'object' || depth > 12) return
+    if (seen.has(node)) return
+    seen.add(node)
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1)
+      return
+    }
+    const tag = typeof node.tag === 'string' ? node.tag : ''
+    if (tag === 'img' || tag === 'img_combination') {
+      parts.push('[图片]')
+      return
+    }
+    if (tag === 'hr') return
+    if (tag === 'at') {
+      push(typeof node.user_name === 'string' && node.user_name !== '' ? node.user_name : '[某人]')
+      return
+    }
+    if ((tag === 'plain_text' || tag === 'lark_md' || tag === 'markdown') && typeof node.content === 'string') {
+      push(node.content)
+      return
+    }
+    push(node.text)
+    push(node.title)
+    push(node.content)
+    push(node.markdown)
+    for (const value of Object.values(node)) walk(value, depth + 1)
+  }
+  walk(content, 0)
+  return parts.join('\n')
+}
+
+/** 把「获取指定消息的内容」返回的一条消息渲染成文字；图片另给出 key 供下载。 */
+function messageItemText(item) {
+  const content = parseJson(item.body?.content) ?? {}
+  switch (item.msg_type) {
+    case 'text': {
+      const text = parseText(item.body?.content, item.mentions)
+      return { text: text === '' ? '[空消息]' : text, imageKeys: [] }
+    }
+    case 'post': {
+      const { text, imageKeys } = parsePost(item.body?.content, item.mentions)
+      return {
+        text: text === '' && imageKeys.length > 0 ? `[富文本，含 ${imageKeys.length} 张图片]` : text,
+        imageKeys,
+      }
+    }
+    case 'image': {
+      const imageKey = typeof content.image_key === 'string' ? content.image_key : undefined
+      return { text: '[图片]', imageKeys: imageKey === undefined ? [] : [imageKey] }
+    }
+    case 'file':
+      return { text: `[文件「${safeFileName(content.file_name) || '未命名'}」]`, imageKeys: [] }
+    case 'audio':
+      return { text: '[语音]', imageKeys: [] }
+    case 'media':
+      return { text: '[视频]', imageKeys: [] }
+    case 'merge_forward':
+      return { text: '[合并转发的聊天记录]', imageKeys: [] }
+    case 'sticker':
+      return { text: '[表情]', imageKeys: [] }
+    case 'share_chat':
+      return { text: '[群名片]', imageKeys: [] }
+    case 'share_user':
+      return { text: '[个人名片]', imageKeys: [] }
+    case 'interactive': {
+      const text = clipText(cardText(content), QUOTE_TEXT_LIMIT)
+      return { text: text === '' ? '[卡片消息（没有可读文本）]' : `[卡片消息]\n${text}`, imageKeys: [] }
+    }
+    default:
+      return { text: `[${item.msg_type ?? '未知'}消息]`, imageKeys: [] }
+  }
 }
 
 function parseJson(content) {
@@ -2458,6 +2640,12 @@ function errorText(error) {
 
 function shorten(text, limit) {
   return text.length <= limit ? text : `${text.slice(0, limit)}…`
+}
+
+/** 按码点截断，避免把 emoji 的代理对切成半个导致卡片更新或消息读取失败。 */
+function clipText(text, limit) {
+  const chars = Array.from(text)
+  return chars.length <= limit ? text : chars.slice(0, limit).join('')
 }
 
 function split(text, size) {
