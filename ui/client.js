@@ -69,14 +69,6 @@ window.__ModuleLoader__.load({
         label: '私聊每日上限',
         desc: '每个学生每天最多可用的私聊轮数；0 表示不限。',
       },
-      allowedChatIds: {
-        label: '课程群白名单',
-        desc: '允许接收消息的课程群 chat_id，每行一个。',
-      },
-      managerChatIds: {
-        label: '助教/老师小群',
-        desc: '这些会话使用助教小群 preset（含飞书 MCP），每行一个 chat_id。',
-      },
     }
 
     const TOOL_META = {
@@ -101,6 +93,7 @@ window.__ModuleLoader__.load({
       '@deepseek-ai/dsh-tool-workflow': { label: '工作流工具', desc: '创建与推进工作流。' },
       '@local/dsh-lark-ta/memory-context': { label: '记忆注入', desc: '每轮注入全局与本 chat 的记忆。' },
       '@local/dsh-lark-ta/memory-tool': { label: '记忆读写', desc: 'feishu_memory 工具；普通会话只能写本 chat。' },
+      '@local/dsh-lark-ta/kb-tool': { label: '经验知识库', desc: 'feishu_kb 工具：按主题维护工作区 kb/，只有夜间整理会话可写。' },
       '@local/dsh-lark-ta/history-context': { label: '聊天历史注入', desc: '注入最近聊天记录与 message_id。' },
       '@local/dsh-lark-ta/reply-tool': { label: '引用回复', desc: '选择引用某条消息回复。' },
       '@local/dsh-lark-ta/send-file': { label: '发送文件', desc: '把工作区文件发回飞书。' },
@@ -250,6 +243,7 @@ window.__ModuleLoader__.load({
 .fsp-memory-group-title + .fsp-entry{border-top:0}
 .fsp-entry-date{flex:none;width:82px;padding-top:1px;font-size:11px;color:var(--dsw-alias-label-caption);font-variant-numeric:tabular-nums}
 .fsp-entry-text{font-size:12.5px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;min-width:0}
+.fsp-kb-text{margin:0;max-height:560px;overflow:auto;padding:12px 14px;border-radius:12px;border:.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-layer-2);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary)}
 .fsp-details{border:.5px solid var(--dsw-alias-border-l3);border-radius:10px;background:var(--dsw-alias-bg-layer-2);padding:9px 12px}
 .fsp-details summary{cursor:pointer;font-size:12px;font-weight:500;color:var(--dsw-alias-label-secondary)}
 .fsp-details pre{margin:9px 0 0;max-height:280px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary)}
@@ -638,6 +632,7 @@ window.__ModuleLoader__.load({
         { id: 'sessions', label: '会话', count: sessions.length },
         { id: 'tasks', label: '工作安排', count: tasks.length + (curatorScheduled ? 1 : 0) },
         { id: 'memory', label: '记忆' },
+        { id: 'kb', label: '知识库' },
         { id: 'tools', label: '工具挂载' },
         { id: 'settings', label: '设置' },
       ]
@@ -647,6 +642,7 @@ window.__ModuleLoader__.load({
         if (id === 'sessions') return h(SessionsTab, { snap })
         if (id === 'tasks') return h(TasksTab, { snap, refresh })
         if (id === 'memory') return h(MemoryTab, { snap })
+        if (id === 'kb') return h(KnowledgeTab)
         if (id === 'tools') return h(ToolsTab)
         if (id === 'settings') return h(SettingsTab)
         return null
@@ -1045,6 +1041,11 @@ window.__ModuleLoader__.load({
           { className: 'fsp-hint' },
           '助教/老师小群的会话使用含飞书 MCP 的 preset；学生私聊与课程群不挂 MCP。',
         ),
+        h(
+          'div',
+          { className: 'fsp-hint' },
+          '群 chat_id 来自部署环境变量，面板只读展示；后续版本改为自动发现。',
+        ),
       )
     }
 
@@ -1065,7 +1066,7 @@ window.__ModuleLoader__.load({
       if (curator === undefined || curator === null) {
         return h(
           Card,
-          { title: '记忆整理', icon: IconSpark },
+          { title: '夜间整理', icon: IconSpark },
           h('div', { className: 'fsp-hint' }, '整理器没有注册运行时（可能未启用）。'),
         )
       }
@@ -1094,7 +1095,7 @@ window.__ModuleLoader__.load({
       return h(
         Card,
         {
-          title: '记忆整理',
+          title: '夜间整理',
           icon: IconSpark,
           extra: h(
             'div',
@@ -1125,9 +1126,10 @@ window.__ModuleLoader__.load({
               '上次结果',
               curator.lastRunAt === undefined
                 ? '还没有成功记录'
-                : `${formatTime(curator.lastRunAt)} · ${curator.lastMessages ?? 0} 条消息 / ${curator.lastChars ?? 0} 字符`,
+                : `${formatTime(curator.lastRunAt)} · ${curator.lastChats ?? 0} 群 / ${curator.lastMessages ?? 0} 条消息 / ${curator.lastChars ?? 0} 字符`,
             ],
             ['计划', `${curator.curatorTime ?? '—'} · ${curator.timeZone ?? '—'}`],
+            ['数据来源', '登记群聊的本地聊天历史（含未 @ 的消息），产出长期记忆与 kb/ 经验知识库'],
           ],
         }),
         curator.lastError
@@ -1377,9 +1379,9 @@ window.__ModuleLoader__.load({
         schedule.push({
           key: 'curator',
           at: curator.nextRunAt,
-          kind: '记忆整理',
+          kind: '夜间整理',
           target: curator.sessionId ?? 'feishu-root',
-          text: `自动整理课程群记忆（${curator.curatorTime ?? '—'} · ${curator.timeZone ?? '—'}）`,
+          text: `读取群聊历史，整理长期记忆与经验知识库（${curator.curatorTime ?? '—'} · ${curator.timeZone ?? '—'}）`,
         })
       }
       schedule.sort((left, right) => left.at - right.at)
@@ -1402,7 +1404,7 @@ window.__ModuleLoader__.load({
             h(
               'p',
               { className: 'fsp-desc' },
-              '按下次触发时间排序：群聊定时任务 + 每晚的记忆整理。取消任务是两步确认。',
+              '按下次触发时间排序：群聊定时任务 + 每晚的夜间整理。取消任务是两步确认。',
             ),
           ),
           h('span', { className: 'fsp-count-pill' }, `${schedule.length} 项`),
@@ -1412,7 +1414,7 @@ window.__ModuleLoader__.load({
           ? h(EmptyState, {
               icon: IconClock,
               title: '接下来没有安排',
-              message: '让机器人在助教/老师小群里设一个提醒，或等记忆整理排期后，这里会显示。',
+              message: '让机器人在助教/老师小群里设一个提醒，或等夜间整理排期后，这里会显示。',
             })
           : h(
               'div',
@@ -1579,6 +1581,8 @@ window.__ModuleLoader__.load({
       }
 
       const groups = []
+      // 记忆只剩 Facts 一个版块；多于一个版块时才显示分组标题。
+      const showGroupTitle = grouped.size > 1
       grouped.forEach((entries, section) => {
         const rows = entries.map((entry, index) =>
           h(
@@ -1592,12 +1596,14 @@ window.__ModuleLoader__.load({
           h(
             'section',
             { className: 'fsp-memory-group', key: section },
-            h(
-              'div',
-              { className: 'fsp-memory-group-title' },
-              h('span', null, section),
-              h('span', { className: 'fsp-count-pill' }, String(entries.length)),
-            ),
+            showGroupTitle
+              ? h(
+                  'div',
+                  { className: 'fsp-memory-group-title' },
+                  h('span', null, section),
+                  h('span', { className: 'fsp-count-pill' }, String(entries.length)),
+                )
+              : null,
             rows,
           ),
         )
@@ -1704,6 +1710,155 @@ window.__ModuleLoader__.load({
                 )
               : null,
             h('div', { className: 'fsp-hint fsp-mono' }, memory.dir ?? ''),
+          ),
+        ),
+      )
+    }
+
+    function KnowledgeTab() {
+      const [data, setData] = React.useState(undefined)
+      const [topic, setTopic] = React.useState('')
+      const [detail, setDetail] = React.useState(undefined)
+      const [error, setError] = React.useState('')
+      const [busy, setBusy] = React.useState(false)
+      const requestRef = React.useRef(0)
+
+      const loadTopic = React.useCallback(async (target) => {
+        const seq = ++requestRef.current
+        setBusy(true)
+        try {
+          const result = await api(`/kb?topic=${encodeURIComponent(target)}`)
+          if (seq !== requestRef.current) return
+          setDetail(result)
+          setError('')
+        } catch (err) {
+          if (seq !== requestRef.current) return
+          setError(errorText(err))
+        } finally {
+          if (seq === requestRef.current) setBusy(false)
+        }
+      }, [])
+
+      const load = React.useCallback(async () => {
+        const seq = ++requestRef.current
+        setBusy(true)
+        try {
+          const result = await api('/kb')
+          if (seq !== requestRef.current) return
+          setData(result)
+          setError('')
+          const first = Array.isArray(result.topics) && result.topics.length > 0 ? result.topics[0].topic : ''
+          setTopic(first)
+          setDetail(undefined)
+          if (first !== '') await loadTopic(first)
+        } catch (err) {
+          if (seq !== requestRef.current) return
+          setError(errorText(err))
+        } finally {
+          if (seq === requestRef.current) setBusy(false)
+        }
+      }, [loadTopic])
+
+      React.useEffect(() => {
+        void load()
+      }, [load])
+
+      if (error !== '' && data === undefined) {
+        return h(EmptyState, {
+          icon: IconAlert,
+          title: '读取知识库失败',
+          message: error,
+          action: h('button', { type: 'button', className: 'fsp-btn primary', onClick: () => void load() }, '重试'),
+        })
+      }
+      if (data === undefined) {
+        return h(
+          'div',
+          { className: 'fsp-loading' },
+          h('div', { className: 'fsp-spinner' }),
+          '正在读取知识库…',
+        )
+      }
+
+      const topics = Array.isArray(data.topics) ? data.topics : []
+      const selected = topics.find((item) => item.topic === topic)
+
+      return h(
+        'div',
+        { className: 'fsp-stack' },
+        h(
+          'div',
+          { className: 'fsp-section-head' },
+          h(
+            'div',
+            null,
+            h('h2', { className: 'fsp-h2' }, '经验知识库'),
+            h(
+              'p',
+              { className: 'fsp-desc' },
+              '夜间整理会话从班级大群与助教/老师小群提炼的助教经验（配环境、工具链、提交流程等），按主题分文件。这里只读展示；答疑时助教按需查阅，不常驻注入。',
+            ),
+          ),
+          h('span', { className: 'fsp-count-pill' }, `${topics.length} 个主题`),
+        ),
+        h(
+          'div',
+          { className: 'fsp-memory' },
+          h(
+            'aside',
+            { className: 'fsp-scopes' },
+            h('div', { className: 'fsp-scope-head' }, '主题'),
+            topics.length === 0
+              ? h('div', { className: 'fsp-hint' }, '知识库还是空的，等夜间整理从群聊里积累。')
+              : topics.map((item) =>
+                  h(ScopeButton, {
+                    key: item.topic,
+                    active: topic === item.topic,
+                    name: item.topic,
+                    meta: `${formatBytes(item.bytes)}${item.preview === '' ? '' : ` · ${item.preview}`}`,
+                    onClick: () => {
+                      if (topic === item.topic) return
+                      setTopic(item.topic)
+                      setDetail(undefined)
+                      void loadTopic(item.topic)
+                    },
+                  }),
+                ),
+          ),
+          h(
+            'section',
+            { className: 'fsp-card fsp-memory-detail' },
+            h(
+              'div',
+              { className: 'fsp-card-head' },
+              h(
+                'div',
+                { className: 'fsp-card-title' },
+                h(IconSpark, { size: 15 }),
+                h('span', null, selected === undefined ? '知识库' : selected.topic),
+                selected !== undefined ? h('span', { className: 'fsp-count-pill' }, formatBytes(selected.bytes)) : null,
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'fsp-btn sm',
+                  disabled: busy || topic === '',
+                  onClick: () => void (topic === '' ? load() : loadTopic(topic)),
+                },
+                h(IconRefresh, { size: 13, className: busy ? 'fsp-spin' : undefined }),
+                busy ? '读取中…' : '刷新',
+              ),
+            ),
+            error !== '' ? h(Alert, { tone: 'error', message: error }) : null,
+            topic === ''
+              ? h('div', { className: 'fsp-hint' }, topics.length === 0 ? '暂无主题。' : '选择左侧主题查看内容。')
+              : detail === undefined
+                ? h('div', { className: 'fsp-loading', style: { minHeight: 200 } }, h('div', { className: 'fsp-spinner' }), '读取主题内容…')
+                : !detail.exists
+                  ? h('div', { className: 'fsp-hint' }, '这个主题已经被删除了，刷新列表再看看。')
+                  : h('pre', { className: 'fsp-kb-text' }, detail.text === '' ? '（空文件）' : detail.text),
+            h('div', { className: 'fsp-hint fsp-mono' }, data.dir ?? ''),
           ),
         ),
       )
@@ -2051,7 +2206,7 @@ window.__ModuleLoader__.load({
             h(
               'p',
               { className: 'fsp-desc' },
-              '这些字段写回 profile 的 cordis.patch.yml，保存后立即生效；密钥和结构性字段不在这里，仍然改配置后重启。',
+              '这些字段写回 profile 的 cordis.patch.yml，保存后立即生效；密钥和结构性字段不在这里，仍然改配置后重启。群 chat_id 等部署级字段由环境变量提供，面板不提供编辑（后续版本改为自动发现）。',
             ),
           ),
           h('span', { className: 'fsp-count-pill' }, `revision ${params.revision ?? '—'}`),

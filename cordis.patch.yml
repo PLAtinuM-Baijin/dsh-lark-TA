@@ -53,6 +53,7 @@
       config:
         ns: feishu-channel
         routeBase: /ta-panel
+        kbDir: !!js (process.env.TA_KB_DIR || '')
 
     # 普通会话 preset：无 shell、无原生文件工具、无后台任务、无子代理、无 MCP。
     - id: preset-feishu-ta

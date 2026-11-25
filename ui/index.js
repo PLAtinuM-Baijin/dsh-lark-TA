@@ -7,6 +7,7 @@
  * 路由（全部走 connection.requestRejection 的登录与 Host/Origin 校验）：
  *   GET  /ta-panel/state   通道、会话、任务、整理器、记忆概览
  *   GET  /ta-panel/memory  全局或某个 chat 的记忆明细
+ *   GET  /ta-panel/kb      助教经验知识库的主题清单或某个主题全文（只读）
  *   GET  /ta-panel/params  可热改字段（volatile）与 revision
  *   POST /ta-panel/params  提交字段修改；并发修改返回 409
  *   GET  /ta-panel/tools   agent preset 的工具行树
@@ -18,6 +19,7 @@
  * 工具挂载走 configEditor：校验后写回 profile patch，并热重载 preset 条目。
  */
 import Schema from '@deepseek-ai/schemastery'
+import { kbDir, listTopics, readTopic, setKbDir } from '../src/kb-store.js'
 import { getPanelRuntime } from '../src/panel-runtime.js'
 import { checkParamValue, describeParams, normalizeBase } from './params.js'
 import { describePlugins, setPluginDisabled, validPath } from './presets.js'
@@ -28,11 +30,15 @@ export const inject = ['webServer', 'connection']
 export const Config = Schema.object({
   ns: Schema.string().default('feishu-channel').description('被管理条目的 profile id（也是 settings 命名空间）'),
   routeBase: Schema.string().default('/ta-panel').description('面板 JSON 路由前缀'),
+  kbDir: Schema.string().description('经验知识库目录；缺省用 TA_KB_DIR 或 <TA_WORKSPACE>/kb'),
 })
 
 const MAX_BODY_BYTES = 64 * 1024
+/** 群 chat_id 属于部署参数，面板不提供手工编辑；后续版本改为自动发现。 */
+const HIDDEN_PARAM_FIELDS = new Set(['allowedChatIds', 'managerChatIds'])
 
 export function apply(ctx, config) {
+  setKbDir(config.kbDir)
   const log = ctx.logger
   const base = normalizeBase(config.routeBase)
   // webserver 的 exact 路由按路径去重（同一个 path 只能有一个 handler），
@@ -40,6 +46,7 @@ export function apply(ctx, config) {
   const routes = [
     ['/state', { GET: handleState }],
     ['/memory', { GET: handleMemory }],
+    ['/kb', { GET: handleKb }],
     ['/params', { GET: handleParamsRead, POST: handleParamsWrite }],
     ['/tools', { GET: handleToolsRead, POST: handleToolsWrite }],
     ['/action', { POST: handleAction }],
@@ -91,6 +98,36 @@ export function apply(ctx, config) {
     }
   }
 
+  async function handleKb(req, res) {
+    const topic = new URL(req.url ?? '/', 'http://localhost').searchParams.get('topic') ?? ''
+    try {
+      const topics = await listTopics()
+      if (topic === '') {
+        sendJson(res, 200, { dir: kbDir(), topics })
+        return
+      }
+      const result = await readTopic(topic)
+      sendJson(res, 200, {
+        dir: kbDir(),
+        topics,
+        topic,
+        exists: result.exists,
+        bytes: result.bytes,
+        text: result.exists ? result.text : '',
+      })
+    } catch (error) {
+      sendJson(res, 400, { error: String(error?.message ?? error) })
+    }
+  }
+
+  /** 部署级字段（群 chat_id）不出现在面板，读写两侧都过滤。 */
+  function visibleParams(params) {
+    return {
+      ...params,
+      fields: (params.fields ?? []).filter((field) => !HIDDEN_PARAM_FIELDS.has(field.name)),
+    }
+  }
+
   async function handleParamsRead(req, res) {
     const settings = settingsService()
     if (settings === undefined) {
@@ -102,7 +139,7 @@ export function apply(ctx, config) {
       sendJson(res, 503, { error: `找不到可配置的插件条目 ${config.ns}` })
       return
     }
-    sendJson(res, 200, describeParams(row))
+    sendJson(res, 200, visibleParams(describeParams(row)))
   }
 
   async function handleParamsWrite(req, res) {
@@ -124,7 +161,7 @@ export function apply(ctx, config) {
       sendJson(res, 503, { error: `找不到可配置的插件条目 ${config.ns}` })
       return
     }
-    const fields = new Map(describeParams(row).fields.map((field) => [field.name, field]))
+    const fields = new Map(visibleParams(describeParams(row)).fields.map((field) => [field.name, field]))
     const clean = {}
     for (const [field, value] of Object.entries(patch)) {
       const spec = fields.get(field)
@@ -158,7 +195,7 @@ export function apply(ctx, config) {
       throw error
     }
     const updated = settings.describe().find((entry) => entry.ns === config.ns)
-    sendJson(res, 200, updated === undefined ? { ns: config.ns, fields: [] } : describeParams(updated))
+    sendJson(res, 200, updated === undefined ? { ns: config.ns, fields: [] } : visibleParams(describeParams(updated)))
   }
 
   const PRESET_MODULE = '@deepseek-ai/dsh-agent-preset'
