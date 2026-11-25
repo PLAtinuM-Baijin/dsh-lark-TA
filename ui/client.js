@@ -1125,7 +1125,7 @@ window.__ModuleLoader__.load({
               '上次结果',
               curator.lastRunAt === undefined
                 ? '还没有成功记录'
-                : `${formatTime(curator.lastRunAt)} · ${curator.lastSessions ?? 0} 个会话 / ${curator.lastChars ?? 0} 字符`,
+                : `${formatTime(curator.lastRunAt)} · ${curator.lastMessages ?? 0} 条消息 / ${curator.lastChars ?? 0} 字符`,
             ],
             ['计划', `${curator.curatorTime ?? '—'} · ${curator.timeZone ?? '—'}`],
           ],

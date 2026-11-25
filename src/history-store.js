@@ -4,6 +4,8 @@
  * 每个 chat 一个 JSONL 文件，记录用户与机器人发出的可见消息（含飞书 message_id），
  * 供每轮请求注入「最近聊天记录」，让模型知道每句话对应哪条消息，
  * 从而自己决定这一轮是引用回复，还是直接发一条新消息。
+ * 夜间记忆整理也直接读这里（readHistoryEntries），因为它保留了群消息里
+ * 每一条被动消息，比 dsh 会话事件更完整。
  *
  * 只用本地文件，不调用飞书的历史消息接口（不需要额外权限）。
  * systemPrompt.context 的 text 必须是同步函数，所以读取走内存缓存 +
@@ -190,6 +192,12 @@ export function hasMessage(chatId, messageId) {
   if (typeof chatId !== 'string' || !CHAT_ID.test(chatId)) return false
   if (typeof messageId !== 'string' || messageId === '') return false
   return loadChat(chatId).some((item) => item.id === messageId)
+}
+
+/** 全部历史条目（按时间升序的副本）；供记忆整理器按时间窗读取，不做截断。 */
+export function readHistoryEntries(chatId) {
+  if (typeof chatId !== 'string' || !CHAT_ID.test(chatId)) return []
+  return loadChat(chatId).map((entry) => ({ ...entry }))
 }
 
 /** 最近 maxEntries 条，超过 maxChars 时从最旧的开始丢；每条正文最多 entryChars 字。 */

@@ -34,11 +34,12 @@
         timeZone: Asia/Shanghai
         logLevel: info
 
-    # 每晚的顶层记忆整理：只读登记群聊的会话 → feishu-root 用 feishu_memory 整理。
+    # 每晚的顶层记忆整理：只读登记群聊的本地聊天历史 → feishu-root 用 feishu_memory 整理。
     - id: feishu-memory-curator
       name: '@local/dsh-lark-ta/memory-curator'
       config:
         memoryDir: !!js (process.env.TA_MEMORY_DIR || '')
+        historyDir: !!js (process.env.TA_HISTORY_DIR || '')
         # 参与整理的群：班级大群 + 助教/老师小群；学生私聊不参与。
         curatorChatIds: !!js (process.env.TA_CURATOR_CHAT_IDS || '').split(',')
         # 其中属于公开群（班级大群）的 chat_id；其余按内部群处理。
