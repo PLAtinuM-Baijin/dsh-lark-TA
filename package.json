@@ -10,7 +10,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/ta-fs-scope.test.mjs"
+    "test": "node --test test/ta-fs-scope.test.mjs test/member-roster.test.mjs"
   },
   "exports": {
     ".": "./src/index.js",

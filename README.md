@@ -11,7 +11,7 @@ C++ 课程 AI 助教的 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) �
 - **两套 preset**：普通会话（课程群、学生私聊）无 shell、无原生文件工具、无飞书 MCP；助教/老师小群额外挂载精简版飞书 MCP（文档、日历、任务、wiki、通讯录、读消息）。
 - **受限文件工具**：`ta_fs` 只读课程目录、只写工作区；`doc_exec` 只允许 unzip/pdftotext/pdfinfo/file；`view_image` 按需把图片交给多模态模型；`luogu` 检索洛谷题库。
 - **长期记忆**：全局记忆 + 每个 chat 的记忆（Markdown 存储，原子写入）。普通会话只能写本 chat，全局记忆只由每晚的整理会话提炼。
-- **记忆整理**：常驻 `feishu-root` 会话，每晚 03:17（可配）直接读取登记群聊的本地聊天历史（含未 @ 的群消息），用 `feishu_memory` 写入/清理；只处理上次成功之后的新消息。面板「导入记录」也可以粘贴 Markdown 格式的聊天导出（如机器人入群前的历史），与当轮历史一起整理，导入文本不落盘。
+- **记忆整理**：常驻 `feishu-root` 会话，每晚 03:17（可配）直接读取登记群聊的本地聊天历史（含未 @ 的群消息），用 `feishu_memory` 写入/清理；只处理上次成功之后的新消息。历史条目记录发言人 open_id，整理时按群成员名册还原姓名并标出助教/老师；合并转发与引用按转述处理，只作背景。面板「导入记录」也可以粘贴 Markdown 格式的聊天导出（如机器人入群前的历史），与当轮历史一起整理，导入文本不落盘。
 - **助教经验知识库**：工作区 `kb/` 下按主题分文件保存可复用的助教经验（配环境、工具链、提交流程等），由整理会话用 `feishu_kb` 维护；答疑时助教按需用 `ta_fs` 查阅，不常驻注入提示词。
 - **定时任务**：只在助教/老师小群创建；到点唤醒当天会话，发送结果。
 - **控制面板**：dsh 侧边栏「TA」整页，含概览、会话、工作安排、记忆、工具挂载、热更新参数六个页签。
@@ -30,6 +30,7 @@ src/
   kb-tool.js          feishu_kb 工具（仅整理会话可写）
   history-store.js    本地聊天历史
   history-context.js  每轮注入最近聊天记录
+  member-roster.js    群成员名册缓存（open_id → 姓名、助教/老师集合）
   reply-tool.js       引用回复 / 新消息
   send-file.js        发送工作区文件
   send-text.js        主动发新消息（仅小群）
@@ -97,7 +98,9 @@ cordis.patch.yml      profile 补丁：插件条目、面板、三个 preset
 
    或把 `TA_LARK_MCP_DIR` 指向已有副本。未配置时 MCP 工具行会启动失败，但不影响其他功能。
 
-5. 配置环境变量（建议 `systemd EnvironmentFile`，权限 0600，不要写进仓库）：
+5. 在飞书开放平台给应用开启「获取群成员列表」权限（`im:chat.members:read`）：机器人启动后与每 6 小时拉一次群成员名册（缓存为 `<TA_HISTORY_DIR>/members.json`），夜间整理靠它还原发言人姓名和助教/老师身份。未开启时名册拉取失败，整理里发言人只显示「用户」，不影响其他功能。
+
+6. 配置环境变量（建议 `systemd EnvironmentFile`，权限 0600，不要写进仓库）：
 
    ```bash
    cp .env.example /etc/dsh-lark-ta.env
@@ -105,9 +108,9 @@ cordis.patch.yml      profile 补丁：插件条目、面板、三个 preset
    chmod 600 /etc/dsh-lark-ta.env
    ```
 
-6. 启动：在 `~/.dsh/profiles/ta` 下用 dsh 启动，或在 systemd 单元里设置 `EnvironmentFile`、`WorkingDirectory` 与 `dsh` 命令。控制面板地址为 `http://<host>:<port>/ta-panel/state` 所在的 dsh Web 页面，侧边栏进入「TA」。
+7. 启动：在 `~/.dsh/profiles/ta` 下用 dsh 启动，或在 systemd 单元里设置 `EnvironmentFile`、`WorkingDirectory` 与 `dsh` 命令。控制面板地址为 `http://<host>:<port>/ta-panel/state` 所在的 dsh Web 页面，侧边栏进入「TA」。
 
-7. 把 `TA.md` 与 `流程安排.md` 放到 `TA_WORKSPACE`（工作区根目录），按你的课程信息补全班级群 chat_id、工作区路径等本地内容。
+8. 把 `TA.md` 与 `流程安排.md` 放到 `TA_WORKSPACE`（工作区根目录），按你的课程信息补全班级群 chat_id、工作区路径等本地内容。
 
 ## 环境变量
 
@@ -120,7 +123,7 @@ cordis.patch.yml      profile 补丁：插件条目、面板、三个 preset
 | `TA_MEMORY_DIR` | 长期记忆目录；默认 `~/.dsh-lark-ta-memory` |
 | `TA_KB_DIR` | 助教经验知识库目录；默认 `<TA_WORKSPACE>/kb` |
 | `TA_SCHEDULE_FILE` | 定时任务持久化文件；默认 `~/.dsh-lark-ta-schedules.json` |
-| `TA_HISTORY_DIR` | 本地聊天历史；默认 `~/.dsh-lark-ta-history` |
+| `TA_HISTORY_DIR` | 本地聊天历史与群成员名册（`members.json`）；默认 `~/.dsh-lark-ta-history` |
 | `TA_DM_LIMIT_FILE` | 私聊日限用量文件；默认 `~/.dsh-lark-ta-dm-limits.json` |
 | `TA_GROUP_CHAT_IDS` | 允许接收消息的群 chat_id；逗号分隔 |
 | `TA_MANAGER_CHAT_IDS` | 助教/老师小群 chat_id（必须是上面群列表的子集）；逗号分隔 |

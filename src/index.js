@@ -48,6 +48,13 @@ import { setChannelRuntime } from './channel-runtime.js'
 import { getCuratorRuntime } from './curator-runtime.js'
 import { configureHistory, hasMessage, recordMessage, removeMessage } from './history-store.js'
 import {
+  MEMBER_REFRESH_MS,
+  fetchChatMembers,
+  mergeRoster,
+  readRoster,
+  saveRoster,
+} from './member-roster.js'
+import {
   isValidChatId,
   listChat,
   listChatFiles,
@@ -236,6 +243,44 @@ export function apply(ctx, config) {
   // 启动时预热：失败会在 journal 留痕，第一条群消息也少等一次 API。
   void botOpenId().catch(() => undefined)
 
+  // --- 群成员名册 -------------------------------------------------------
+  // 夜间整理靠它把 open_id 还原成姓名，并判定谁在助教/老师小群里。
+  // 拉取失败（典型原因：应用缺「获取群成员列表」权限）只记一次日志，旧名册继续用。
+  const rosterWarned = new Set()
+  let rosterRefreshing = false
+  async function refreshRoster(reason) {
+    if (rosterRefreshing) return
+    rosterRefreshing = true
+    try {
+      const { allowed, managers } = chatLists()
+      const targets = [...new Set([...allowed, ...managers])]
+      const fetched = new Map()
+      for (const chatId of targets) {
+        try {
+          fetched.set(chatId, await fetchChatMembers(client, chatId))
+        } catch (error) {
+          const message = `member roster fetch failed for ${chatId}: ${errorText(error)}`
+          if (!rosterWarned.has(message)) {
+            rosterWarned.add(message)
+            log.warn(`feishu-channel: ${message}`)
+            console.warn(`feishu-channel: ${message}`)
+          }
+        }
+      }
+      if (fetched.size === 0) return
+      const next = mergeRoster(readRoster(), fetched, managers)
+      await saveRoster(next)
+      log.info(
+        `feishu-channel: member roster refreshed (${fetched.size}/${targets.length} chats, ` +
+          `${next.staffOpenIds.length} staff, reason=${reason})`,
+      )
+    } catch (error) {
+      log.warn(`feishu-channel: member roster refresh failed: ${errorText(error)}`)
+    } finally {
+      rosterRefreshing = false
+    }
+  }
+
   /** 群聊触发条件：mentions 里必须有机器人自己的 open_id。 */
   async function mentionedBot(mentions) {
     if (!Array.isArray(mentions) || mentions.length === 0) return false
@@ -321,6 +366,15 @@ export function apply(ctx, config) {
       setWsState('stopped')
     },
     'feishu-channel.ws',
+  )
+
+  ctx.effect(
+    () => {
+      const timer = setInterval(() => void refreshRoster('timer'), MEMBER_REFRESH_MS)
+      void refreshRoster('startup')
+      return () => clearInterval(timer)
+    },
+    'feishu-channel.roster',
   )
 
   // --- 定时任务 ---------------------------------------------------------
@@ -555,6 +609,8 @@ export function apply(ctx, config) {
 
     const inbound = parseInbound(message)
     if (inbound === null) return
+    const senderId =
+      typeof event?.sender?.sender_id?.open_id === 'string' ? event.sender.sender_id.open_id : ''
 
     // 撤回事件可能比消息事件先到：已经撤回的消息不要再交给模型。
     if (recallTombstones.has(message.message_id)) {
@@ -575,7 +631,7 @@ export function apply(ctx, config) {
     // 群聊里没 @ 到机器人的消息只读不回：照常解析归档、写本地历史，让模型下次被 @ 时能看到。
     // @ 了别人、@所有人 都不算触发。
     if (message.chat_type === 'group' && config.requireMentionInGroup.get() && !(await mentionedBot(message.mentions))) {
-      ingestPassive(stateFor(message.chat_id), message.message_id, inbound)
+      ingestPassive(stateFor(message.chat_id), message.message_id, inbound, senderId)
       return
     }
 
@@ -584,6 +640,7 @@ export function apply(ctx, config) {
       at: Date.now(),
       from: 'user',
       text: historyTextOfInbound(inbound),
+      sender: senderId === '' ? undefined : senderId,
     })
 
     const state = stateFor(message.chat_id)
@@ -813,15 +870,15 @@ export function apply(ctx, config) {
    * 群聊里没 @ 的消息：只下载归档、写本地历史，不唤醒模型。
    * 单独一条队列，避免大文件下载拖慢 @ 消息的回复。
    */
-  function ingestPassive(state, messageId, inbound) {
+  function ingestPassive(state, messageId, inbound, senderId) {
     state.passiveChain = state.passiveChain
-      .then(() => ingestPassiveNow(state, messageId, inbound))
+      .then(() => ingestPassiveNow(state, messageId, inbound, senderId))
       .catch((error) => {
         log.error(`feishu-channel: failed to ingest (passive) ${messageId} in ${state.sessionId}: ${String(error)}`)
       })
   }
 
-  async function ingestPassiveNow(state, messageId, inbound) {
+  async function ingestPassiveNow(state, messageId, inbound, senderId) {
     state.inflight.add(messageId)
     try {
       const prepared = await prepareInbound(messageId, inbound)
@@ -834,6 +891,7 @@ export function apply(ctx, config) {
         at: Date.now(),
         from: 'user',
         text: passiveHistoryText(inbound, prepared),
+        sender: senderId === '' ? undefined : senderId,
       })
     } finally {
       state.inflight.delete(messageId)
@@ -2045,8 +2103,9 @@ export function apply(ctx, config) {
 /** 未 @ 的群消息进本地历史时带上归档位置，模型被 @ 后能直接找到群文件。 */
 function passiveHistoryText(inbound, prepared) {
   // 合并转发只有准备阶段才读得到正文；历史里留一段开头，夜间整理也能看到。
+  // 标记必须写明「转述」：转发人不是原发言者，内容不能当成本群成员的表态。
   const merged = inbound.kind === 'merge_forward' ? shorten(String(prepared.text ?? '').replaceAll('\n', ' '), 480) : ''
-  const base = merged === '' ? historyTextOfInbound(inbound) : `[合并转发聊天记录] ${merged}`
+  const base = merged === '' ? historyTextOfInbound(inbound) : `[合并转发｜转述内容，非本人发言] ${merged}`
   const archived = prepared.archived ?? []
   if (archived.length === 0) return base
   const text = prepared.textPath === undefined ? '' : `；抽取文字：${prepared.textPath}`
@@ -2071,7 +2130,7 @@ function historyTextOfKind(inbound) {
     case 'image':
       return '[图片]'
     case 'merge_forward':
-      return '[合并转发聊天记录]'
+      return '[合并转发｜转述内容，非本人发言]'
     default:
       return inbound.text
   }

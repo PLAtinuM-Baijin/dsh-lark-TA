@@ -104,7 +104,10 @@ function normalizeEntry(value) {
   if (text === '') return undefined
   const at = Number.isFinite(value.at) ? value.at : 0
   const from = value.from === 'bot' ? 'bot' : 'user'
-  return { id: value.id, at, from, text }
+  // 旧条目不存发言人；新条目尽量带 open_id，供夜间整理还原姓名与角色。
+  const sender =
+    typeof value.sender === 'string' && value.sender.trim() !== '' ? value.sender.trim() : undefined
+  return { id: value.id, at, from, text, ...(sender === undefined ? {} : { sender }) }
 }
 
 function clipLine(text) {
@@ -164,6 +167,7 @@ export function recordMessage(chatId, entry) {
     at: entry?.at ?? Date.now(),
     from: entry?.from,
     text: entry?.text ?? '',
+    sender: entry?.sender,
   })
   if (normalized === undefined) return false
 
