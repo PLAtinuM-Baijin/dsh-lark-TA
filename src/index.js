@@ -1994,13 +1994,29 @@ export function apply(ctx, config) {
     return { scope: 'chat', chatId, entries: listChat(chatId), render: renderChat(chatId) }
   }
 
-  /** 面板动作：手动整理记忆、发一条测试消息、取消定时任务。 */
+  /** 面板动作：手动整理记忆、导入聊天记录、发一条测试消息、取消定时任务。 */
   async function panelAction(input) {
     const kind = typeof input?.kind === 'string' ? input.kind : ''
     if (kind === 'curator-run') {
       const curator = getCuratorRuntime()
       if (curator === undefined) throw new Error('记忆整理插件当前未运行')
       return { kind, ...curator.runNow('panel') }
+    }
+    if (kind === 'curator-import') {
+      const curator = getCuratorRuntime()
+      if (curator === undefined) throw new Error('记忆整理插件当前未运行')
+      const text = typeof input?.text === 'string' ? input.text.trim() : ''
+      if (text === '') throw new Error('导入内容为空')
+      const status = curator.status()
+      const limit = typeof status.importLimit === 'number' ? status.importLimit : 60000
+      if (Array.from(text).length > limit) throw new Error(`导入内容超过 ${limit} 字符，请分次导入`)
+      const chatId = typeof input?.chatId === 'string' ? input.chatId.trim() : ''
+      if (chatId !== '' && !status.curatorChatIds.includes(chatId)) {
+        throw new Error(`chat ${chatId} 不在整理范围里`)
+      }
+      const result = curator.importNow({ text, chatId })
+      if (result.accepted !== true) throw new Error('记忆整理正在运行，请稍后再导入')
+      return { kind, ...result, chatId }
     }
     if (kind === 'send-test') {
       const lists = chatLists()

@@ -33,7 +33,8 @@ export const Config = Schema.object({
   kbDir: Schema.string().description('经验知识库目录；缺省用 TA_KB_DIR 或 <TA_WORKSPACE>/kb'),
 })
 
-const MAX_BODY_BYTES = 64 * 1024
+/** 面板导入 Markdown 聊天记录时请求体可能到几百 KB，其余路由只发小 JSON。 */
+const MAX_BODY_BYTES = 512 * 1024
 /** 群 chat_id 属于部署参数，面板不提供手工编辑；后续版本改为自动发现。 */
 const HIDDEN_PARAM_FIELDS = new Set(['allowedChatIds', 'managerChatIds'])
 

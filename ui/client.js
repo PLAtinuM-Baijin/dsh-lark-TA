@@ -1062,6 +1062,9 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false)
       const [message, setMessage] = React.useState('')
       const [failure, setFailure] = React.useState('')
+      const [importOpen, setImportOpen] = React.useState(false)
+      const [importText, setImportText] = React.useState('')
+      const [importChat, setImportChat] = React.useState('')
 
       if (curator === undefined || curator === null) {
         return h(
@@ -1091,6 +1094,37 @@ window.__ModuleLoader__.load({
       }
 
       const running = busy || curator.running === true
+      const importLimit = typeof curator.importLimit === 'number' ? curator.importLimit : 60000
+      const importChars = Array.from(importText).length
+      const publicIds = new Set(Array.isArray(curator.publicChatIds) ? curator.publicChatIds : [])
+      const internalChats = (Array.isArray(curator.curatorChatIds) ? curator.curatorChatIds : []).filter(
+        (id) => !publicIds.has(id),
+      )
+      const importTarget = internalChats.includes(importChat) ? importChat : ''
+
+      const runImport = async () => {
+        setBusy(true)
+        setMessage('')
+        setFailure('')
+        try {
+          const result = await api('/action', {
+            method: 'POST',
+            body: JSON.stringify({ kind: 'curator-import', text: importText, chatId: importTarget }),
+          })
+          if (result?.accepted) {
+            setImportText('')
+            setImportOpen(false)
+            setMessage('已开始整理导入素材，完成后状态会自动刷新。')
+          } else {
+            setFailure('整理器正在运行，请稍后再导入。')
+          }
+          await refresh()
+        } catch (err) {
+          setFailure(errorText(err))
+        } finally {
+          setBusy(false)
+        }
+      }
 
       return h(
         Card,
@@ -1105,6 +1139,19 @@ window.__ModuleLoader__.load({
               tone: curator.running ? 'accent' : 'idle',
               pulse: curator.running === true,
             }),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'fsp-btn sm',
+                onClick: () => {
+                  setImportOpen((open) => !open)
+                  setMessage('')
+                  setFailure('')
+                },
+              },
+              importOpen ? '收起导入' : '导入记录',
+            ),
             h(
               'button',
               {
@@ -1129,9 +1176,69 @@ window.__ModuleLoader__.load({
                 : `${formatTime(curator.lastRunAt)} · ${curator.lastChats ?? 0} 群 / ${curator.lastMessages ?? 0} 条消息 / ${curator.lastChars ?? 0} 字符`,
             ],
             ['计划', `${curator.curatorTime ?? '—'} · ${curator.timeZone ?? '—'}`],
-            ['数据来源', '登记群聊的本地聊天历史（含未 @ 的消息），产出长期记忆与 kb/ 经验知识库'],
+            [
+              '上次导入',
+              curator.lastImportAt === undefined
+                ? '—'
+                : `${formatTime(curator.lastImportAt)} · ${curator.lastImportChars ?? 0} 字符`,
+            ],
+            ['数据来源', '登记群聊的本地聊天历史（含未 @ 的消息）与面板导入的 Markdown 导出，产出长期记忆与 kb/ 经验知识库'],
           ],
         }),
+        importOpen
+          ? h(
+              'div',
+              { className: 'fsp-subgroup', style: { display: 'grid', gap: '8px' } },
+              h(
+                'div',
+                { className: 'fsp-subtitle-row' },
+                h('span', null, '导入 Markdown 聊天记录'),
+                h('span', { className: 'fsp-count-pill' }, `${importChars} / ${importLimit}`),
+              ),
+              internalChats.length > 0
+                ? h(
+                    'select',
+                    {
+                      className: 'fsp-input',
+                      value: importChat,
+                      'aria-label': '导入归属',
+                      onChange: (event) => setImportChat(event.target.value),
+                    },
+                    h('option', { value: '' }, '公开群（共性内容进全局记忆）'),
+                    internalChats.map((id) =>
+                      h('option', { key: id, value: id }, `内部群 ${id}（只写该群记忆）`),
+                    ),
+                  )
+                : null,
+              h('textarea', {
+                className: 'fsp-input fsp-textarea',
+                rows: 8,
+                value: importText,
+                placeholder: '粘贴 Markdown 格式的聊天记录，例如机器人入群前的群聊导出。可在开头附一行身份说明（谁是老师、助教、学生）。',
+                'aria-label': '导入内容',
+                onChange: (event) => setImportText(event.target.value),
+              }),
+              h(
+                'div',
+                { className: 'fsp-hint' },
+                `与当轮聊天历史一起交给整理员：公开群内容可进全局记忆，内部群内容只写该群记忆；知识库只收老师/助教确认的结论。单次最多 ${importLimit} 字符，超长请分批导入。`,
+              ),
+              h(
+                'div',
+                { className: 'fsp-inline-chips' },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'fsp-btn primary',
+                    disabled: running || importChars === 0 || importChars > importLimit,
+                    onClick: () => void runImport(),
+                  },
+                  running ? '整理中…' : '导入并整理',
+                ),
+              ),
+            )
+          : null,
         curator.lastError
           ? h(Alert, { tone: 'error', message: `上次错误：${curator.lastError}` })
           : null,
